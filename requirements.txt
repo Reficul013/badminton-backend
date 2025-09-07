@@ -1,3 +1,19 @@
-fastapi
-uvicorn
-sqlmodel
+fastapi>=0.110,<0.116
+uvicorn[standard]>=0.23,<0.31
+
+# ORM / models
+sqlmodel==0.0.22
+SQLAlchemy>=2.0,<2.1
+pydantic>=2.6,<3
+
+# DB driver (Neon Postgres)
+psycopg[binary]>=3.1,<3.2
+
+# env + auth
+python-dotenv>=1.0,<2
+google-auth>=2.28,<3
+google-auth-oauthlib>=1.2,<2
+
+# optional; not required for verifying ID tokens
+pydantic-settings
+firebase-admin
