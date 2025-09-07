@@ -17,3 +17,4 @@ google-auth-oauthlib>=1.2,<2
 # optional; not required for verifying ID tokens
 pydantic-settings
 firebase-admin
+psycopg2-binary==2.9.9
