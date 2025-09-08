@@ -9,18 +9,84 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
+from sqlmodel import Session
 from sqlalchemy import func, select as sa_select
 from sqlalchemy.exc import IntegrityError
-
-from sqlmodel import Session, select as sql_select
 
 from .database import init_db, get_session
 from .auth import get_current_user_id
 from . import models as m
 from . import schemas as s
 
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.0"
+
+# ---------------- helpers (shape ORM rows into plain dicts) ----------------
+def user_to_dict(u: m.User) -> dict:
+    return {
+        "id": u.id,
+        "name": u.name,
+        "email": u.email,
+        "role": u.role,
+        "nickname": u.nickname,
+        "avatar_url": u.avatar_url,
+        "owns_car": u.owns_car,
+        "bio": u.bio,
+        "phone": u.phone,
+    }
+
+def vehicle_to_dict(v: m.Vehicle) -> dict:
+    return {
+        "id": v.id,
+        "owner_id": v.owner_id,
+        "name": v.name,
+        "model": v.model,
+        "license_plate": v.license_plate,
+        "photo_url": v.photo_url,
+    }
+
+def reservation_to_dict(r: m.Reservation) -> dict:
+    return {
+        "id": r.id,
+        "ride_id": r.ride_id,
+        "rider_id": r.rider_id,
+        "created_at": r.created_at,
+        "status": r.status,
+    }
+
+def ride_to_full_dict(session: Session, r: m.Ride) -> dict:
+    taken = session.exec(
+        sa_select(func.count(m.Reservation.id)).where(
+            (m.Reservation.ride_id == r.id) &
+            (m.Reservation.status == "CONFIRMED")
+        )
+    ).scalar_one() or 0
+
+    host = session.get(m.User, r.host_id)
+    veh  = session.get(m.Vehicle, r.vehicle_id)
+
+    # serialize datetime explicitly
+    dt = r.departure_time
+    if isinstance(dt, datetime):
+        dt = dt.isoformat()
+
+    return {
+        "id": r.id,
+        "host_id": r.host_id,
+        "vehicle_id": r.vehicle_id,
+        "origin": r.origin,
+        "departure_time": dt,
+        "seats_total": r.seats_total,
+        "seats_taken": int(taken),
+        "notes": r.notes,
+        "destination": "Rally",
+        "host_nickname": host.nickname if host else None,
+        "host_avatar_url": host.avatar_url if host else None,
+        "vehicle_name": veh.name if veh else None,
+        "vehicle_model": veh.model if veh else None,
+        "vehicle_photo_url": veh.photo_url if veh else None,
+    }
+# --------------------------------------------------------------------------
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Rides to Rally API", version=APP_VERSION)
@@ -59,8 +125,7 @@ def create_app() -> FastAPI:
         user = session.get(m.User, user_id)
         if not user:
             raise HTTPException(404, "User not found")
-        # validate to Pydantic explicitly
-        return s.UserRead.model_validate(user)
+        return user_to_dict(user)
 
     @app.patch("/api/users/{user_id}", response_model=s.UserRead)
     def update_user(
@@ -80,20 +145,18 @@ def create_app() -> FastAPI:
         session.add(user)
         session.commit()
         session.refresh(user)
-        return s.UserRead.model_validate(user)
+        return user_to_dict(user)
 
     # --------------- Vehicles ---------------
     @app.get("/api/vehicles", response_model=List[s.VehicleRead])
     def list_vehicles(
         session: Session = Depends(get_session),
-        user_id: int = Depends(get_current_user_id),  # auth + scope
+        user_id: int = Depends(get_current_user_id),  # auth + scoping
     ):
-        # Use SQLModel.select for clean ORM objects
         rows = session.exec(
-            sql_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
+            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
         ).all()
-        # Return strictly-validated Pydantic models
-        return [s.VehicleRead.model_validate(v) for v in rows]
+        return [vehicle_to_dict(v) for v in rows]
 
     @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=201)
     def create_vehicle(
@@ -105,44 +168,18 @@ def create_app() -> FastAPI:
         session.add(v)
         session.commit()
         session.refresh(v)
-        return s.VehicleRead.model_validate(v)
+        return vehicle_to_dict(v)
 
     # ---------------- Rides -----------------
-    @app.get("/api/rides", response_model=List[s.RideReadFull])
+    # Return plain dicts to avoid Pydantic validation pitfalls on this endpoint
+    @app.get("/api/rides")
     def list_rides(session: Session = Depends(get_session)):
-        rides = session.exec(sa_select(m.Ride)).all()
-        out: List[s.RideReadFull] = []
-        for r in rides:
-            taken = session.exec(
-                sa_select(func.count(m.Reservation.id)).where(
-                    (m.Reservation.ride_id == r.id) &
-                    (m.Reservation.status == "CONFIRMED")
-                )
-            ).scalar_one() or 0
-
-            host = session.get(m.User, r.host_id)
-            veh  = session.get(m.Vehicle, r.vehicle_id)
-
-            out.append(s.RideReadFull(
-                id=r.id,
-                host_id=r.host_id,
-                vehicle_id=r.vehicle_id,
-                origin=r.origin,
-                departure_time=r.departure_time,
-                seats_total=r.seats_total,
-                seats_taken=int(taken),
-                notes=r.notes,
-                destination="Rally",
-                host_nickname=host.nickname if host else None,
-                host_avatar_url=host.avatar_url if host else None,
-                vehicle_name=veh.name if veh else None,
-                vehicle_model=veh.model if veh else None,
-                vehicle_photo_url=veh.photo_url if veh else None,
-            ))
-        out.sort(key=lambda x: x.departure_time)
+        rows = session.exec(sa_select(m.Ride)).all()
+        out = [ride_to_full_dict(session, r) for r in rows]
+        out.sort(key=lambda x: x["departure_time"])
         return out
 
-    @app.post("/api/rides", response_model=s.RideRead)
+    @app.post("/api/rides")
     def create_ride(
         payload: s.RideCreate,
         user_id: int = Depends(get_current_user_id),
@@ -155,7 +192,7 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "Set 'I own a car' in your profile to host")
 
         my_vehicles = session.exec(
-            sql_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
+            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
         ).all()
         if not my_vehicles:
             raise HTTPException(400, "Add your car in Profile before hosting")
@@ -176,17 +213,17 @@ def create_app() -> FastAPI:
         session.commit()
         session.refresh(ride)
 
-        return s.RideRead(
-            id=ride.id,
-            host_id=ride.host_id,
-            vehicle_id=ride.vehicle_id,
-            origin=ride.origin,
-            departure_time=ride.departure_time,
-            seats_total=ride.seats_total,
-            seats_taken=0,
-            notes=ride.notes,
-            destination="Rally",
-        )
+        return {
+            "id": ride.id,
+            "host_id": ride.host_id,
+            "vehicle_id": ride.vehicle_id,
+            "origin": ride.origin,
+            "departure_time": ride.departure_time.isoformat(),
+            "seats_total": ride.seats_total,
+            "seats_taken": 0,
+            "notes": ride.notes,
+            "destination": "Rally",
+        }
 
     # ------------- Reservations -------------
     @app.post("/api/reservations", response_model=s.ReservationRead)
@@ -196,7 +233,7 @@ def create_app() -> FastAPI:
         session: Session = Depends(get_session),
     ):
         ride = session.exec(
-            sql_select(m.Ride).where(m.Ride.id == payload.ride_id).with_for_update()
+            sa_select(m.Ride).where(m.Ride.id == payload.ride_id).with_for_update()
         ).one_or_none()
         if not ride:
             raise HTTPException(404, "Ride not found")
@@ -222,8 +259,9 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "You already reserved a seat on this ride")
 
         session.refresh(res)
-        return s.ReservationRead.model_validate(res)
+        return reservation_to_dict(res)
 
     return app
+
 
 app = create_app()
