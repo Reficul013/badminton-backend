@@ -1,7 +1,7 @@
 # app/main.py
 import os
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -145,6 +145,7 @@ def create_app() -> FastAPI:
         return user_to_dict(user)
 
     # --------------- Vehicles ---------------
+
     @app.get("/api/vehicles", response_model=List[s.VehicleRead])
     def list_vehicles(
         session: Session = Depends(get_session),
@@ -155,17 +156,62 @@ def create_app() -> FastAPI:
         ).scalars().all()
         return [vehicle_to_dict(v) for v in rows]
 
-    @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=201)
-    def create_vehicle(
+    @app.get("/api/vehicles/me", response_model=Optional[s.VehicleRead])
+    def get_my_vehicle(
+        session: Session = Depends(get_session),
+        user_id: int = Depends(get_current_user_id),
+    ):
+        v = session.exec(
+            sa_select(m.Vehicle)
+            .where(m.Vehicle.owner_id == user_id)
+            .order_by(m.Vehicle.id.desc())
+        ).scalars().first()
+        return vehicle_to_dict(v) if v else None
+
+    def _upsert_vehicle(session: Session, user_id: int, payload: s.VehicleCreate) -> dict:
+        # Latest vehicle for user (treat vehicles as 1-per-user)
+        v = session.exec(
+            sa_select(m.Vehicle)
+            .where(m.Vehicle.owner_id == user_id)
+            .order_by(m.Vehicle.id.desc())
+        ).scalars().first()
+
+        data = payload.model_dump(exclude_unset=True)
+        # Don't clobber existing photo with null unless explicitly provided
+        if data.get("photo_url", None) is None:
+            data.pop("photo_url", None)
+
+        if v:
+            for k, val in data.items():
+                setattr(v, k, val)
+            session.add(v)
+            session.commit()
+            session.refresh(v)
+            return vehicle_to_dict(v)
+        else:
+            v = m.Vehicle(owner_id=user_id, **payload.model_dump())
+            session.add(v)
+            session.commit()
+            session.refresh(v)
+            return vehicle_to_dict(v)
+
+    # Keep POST but make it UPSERT (return 200 so client can reuse)
+    @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=200)
+    def create_or_update_vehicle(
         payload: s.VehicleCreate,
         user_id: int = Depends(get_current_user_id),
         session: Session = Depends(get_session),
     ):
-        v = m.Vehicle(owner_id=user_id, **payload.model_dump())
-        session.add(v)
-        session.commit()
-        session.refresh(v)
-        return vehicle_to_dict(v)
+        return _upsert_vehicle(session, user_id, payload)
+
+    # Explicit PUT endpoint as well
+    @app.put("/api/vehicles/me", response_model=s.VehicleRead)
+    def put_my_vehicle(
+        payload: s.VehicleCreate,
+        user_id: int = Depends(get_current_user_id),
+        session: Session = Depends(get_session),
+    ):
+        return _upsert_vehicle(session, user_id, payload)
 
     # ---------------- Rides -----------------
     @app.get("/api/rides")
@@ -188,7 +234,9 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "Set 'I own a car' in your profile to host")
 
         my_vehicles = session.exec(
-            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
+            sa_select(m.Vehicle)
+            .where(m.Vehicle.owner_id == user_id)
+            .order_by(m.Vehicle.id.desc())
         ).scalars().all()
         if not my_vehicles:
             raise HTTPException(400, "Add your car in Profile before hosting")
