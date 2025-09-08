@@ -1,10 +1,10 @@
-# app/schemas.py  (Pydantic v2)
+# app/schemas.py
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, ConfigDict
 
-# Base that enables SQLModel/ORM attribute loading
-class ORMModel(BaseModel):
+# Enable validation from SQLModel/SQLAlchemy objects (Pydantic v2)
+class ORMBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 # ---------- Users ----------
@@ -15,7 +15,7 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
 
-class UserRead(ORMModel):
+class UserRead(ORMBase):
     id: int
     name: str
     email: str
@@ -33,7 +33,7 @@ class VehicleCreate(BaseModel):
     license_plate: Optional[str] = None
     photo_url: Optional[str] = None
 
-class VehicleRead(ORMModel):
+class VehicleRead(ORMBase):
     id: int
     owner_id: int
     name: str
@@ -48,7 +48,7 @@ class RideCreate(BaseModel):
     seats_total: int
     notes: Optional[str] = None
 
-class RideRead(ORMModel):
+class RideRead(ORMBase):
     id: int
     host_id: int
     vehicle_id: int
@@ -70,7 +70,7 @@ class RideReadFull(RideRead):
 class ReservationCreate(BaseModel):
     ride_id: int
 
-class ReservationRead(ORMModel):
+class ReservationRead(ORMBase):
     id: int
     ride_id: int
     rider_id: int

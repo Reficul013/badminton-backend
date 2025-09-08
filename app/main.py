@@ -20,41 +20,6 @@ from . import schemas as s
 
 APP_VERSION = "0.5.0"
 
-# ---------------- helpers to shape ORM rows into dicts ----------------
-def user_to_dict(u: m.User) -> dict:
-    return {
-        "id": u.id,
-        "name": u.name,
-        "email": u.email,
-        "role": u.role,
-        "nickname": u.nickname,
-        "avatar_url": u.avatar_url,
-        "owns_car": u.owns_car,
-        "bio": u.bio,
-        "phone": u.phone,
-    }
-
-def vehicle_to_dict(v: m.Vehicle) -> dict:
-    return {
-        "id": v.id,
-        "owner_id": v.owner_id,
-        "name": v.name,
-        "model": v.model,
-        "license_plate": v.license_plate,
-        "photo_url": v.photo_url,
-    }
-
-def reservation_to_dict(r: m.Reservation) -> dict:
-    return {
-        "id": r.id,
-        "ride_id": r.ride_id,
-        "rider_id": r.rider_id,
-        "created_at": r.created_at,
-        "status": r.status,
-    }
-# ---------------------------------------------------------------------
-
-
 def create_app() -> FastAPI:
     app = FastAPI(title="Rides to Rally API", version=APP_VERSION)
 
@@ -92,7 +57,7 @@ def create_app() -> FastAPI:
         user = session.get(m.User, user_id)
         if not user:
             raise HTTPException(404, "User not found")
-        return user_to_dict(user)
+        return user  # ORM -> Pydantic via from_attributes
 
     @app.patch("/api/users/{user_id}", response_model=s.UserRead)
     def update_user(
@@ -112,7 +77,7 @@ def create_app() -> FastAPI:
         session.add(user)
         session.commit()
         session.refresh(user)
-        return user_to_dict(user)
+        return user  # ORM -> Pydantic via from_attributes
 
     # --------------- Vehicles ---------------
     @app.get("/api/vehicles", response_model=List[s.VehicleRead])
@@ -123,7 +88,7 @@ def create_app() -> FastAPI:
         rows = session.exec(
             sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
         ).all()
-        return [vehicle_to_dict(v) for v in rows]
+        return rows  # ORM -> Pydantic via from_attributes
 
     @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=201)
     def create_vehicle(
@@ -135,7 +100,7 @@ def create_app() -> FastAPI:
         session.add(v)
         session.commit()
         session.refresh(v)
-        return vehicle_to_dict(v)
+        return v  # ORM -> Pydantic via from_attributes
 
     # ---------------- Rides -----------------
     @app.get("/api/rides", response_model=List[s.RideReadFull])
@@ -163,11 +128,11 @@ def create_app() -> FastAPI:
                 seats_taken=int(taken),
                 notes=r.notes,
                 destination="Rally",
-                host_nickname=host.nickname if host else None,
-                host_avatar_url=host.avatar_url if host else None,
-                vehicle_name=veh.name if veh else None,
-                vehicle_model=veh.model if veh else None,
-                vehicle_photo_url=veh.photo_url if veh else None,
+                host_nickname=getattr(host, "nickname", None),
+                host_avatar_url=getattr(host, "avatar_url", None),
+                vehicle_name=getattr(veh, "name", None),
+                vehicle_model=getattr(veh, "model", None),
+                vehicle_photo_url=getattr(veh, "photo_url", None),
             ))
         out.sort(key=lambda x: x.departure_time)
         return out
@@ -230,7 +195,6 @@ def create_app() -> FastAPI:
         ).one_or_none()
         if not ride:
             raise HTTPException(404, "Ride not found")
-
         if ride.host_id == user_id:
             raise HTTPException(400, "Host cannot reserve own ride")
 
@@ -252,9 +216,8 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "You already reserved a seat on this ride")
 
         session.refresh(res)
-        return reservation_to_dict(res)
+        return res  # ORM -> Pydantic via from_attributes
 
     return app
-
 
 app = create_app()
