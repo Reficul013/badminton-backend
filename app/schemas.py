@@ -1,29 +1,19 @@
-from typing import Optional
+# app/schemas.py  (Pydantic v2)
 from datetime import datetime
-from pydantic import BaseModel
+from typing import Optional
+from pydantic import BaseModel, ConfigDict
 
-
-# ------------------------------------------------------------------
-# Base class that works for both Pydantic v1 and v2
-# ------------------------------------------------------------------
+# Base that enables SQLModel/ORM attribute loading
 class ORMModel(BaseModel):
-    # Pydantic v2
-    model_config = {"from_attributes": True}
-    # Pydantic v1
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
-
-# ------------------------------------------------------------------
-# Users
-# ------------------------------------------------------------------
-class UserUpdate(ORMModel):
+# ---------- Users ----------
+class UserUpdate(BaseModel):
     nickname: Optional[str] = None
     owns_car: Optional[bool] = None
     bio: Optional[str] = None
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
-
 
 class UserRead(ORMModel):
     id: int
@@ -35,20 +25,13 @@ class UserRead(ORMModel):
     owns_car: bool
     bio: Optional[str] = None
     phone: Optional[str] = None
-    # If you want to expose these, uncomment:
-    # created_at: datetime
-    # updated_at: datetime
 
-
-# ------------------------------------------------------------------
-# Vehicles
-# ------------------------------------------------------------------
-class VehicleCreate(ORMModel):
+# ---------- Vehicles ----------
+class VehicleCreate(BaseModel):
     name: str
     model: str
     license_plate: Optional[str] = None
     photo_url: Optional[str] = None
-
 
 class VehicleRead(ORMModel):
     id: int
@@ -57,18 +40,13 @@ class VehicleRead(ORMModel):
     model: str
     license_plate: Optional[str] = None
     photo_url: Optional[str] = None
-    # created_at: datetime  # expose if you need it
 
-
-# ------------------------------------------------------------------
-# Rides (destination is presented by the API as "Rally"; not stored)
-# ------------------------------------------------------------------
-class RideCreate(ORMModel):
+# ---------- Rides ----------
+class RideCreate(BaseModel):
     origin: str
     departure_time: datetime
     seats_total: int
     notes: Optional[str] = None
-
 
 class RideRead(ORMModel):
     id: int
@@ -77,11 +55,9 @@ class RideRead(ORMModel):
     origin: str
     departure_time: datetime
     seats_total: int
-    seats_taken: int               # compute in the query/route
+    seats_taken: int
     notes: Optional[str] = None
-    destination: str = "Rally"     # computed/presented field
-    # created_at: datetime         # expose if you need it
-
+    destination: str = "Rally"
 
 class RideReadFull(RideRead):
     host_nickname: Optional[str] = None
@@ -90,13 +66,9 @@ class RideReadFull(RideRead):
     vehicle_model: Optional[str] = None
     vehicle_photo_url: Optional[str] = None
 
-
-# ------------------------------------------------------------------
-# Reservations
-# ------------------------------------------------------------------
-class ReservationCreate(ORMModel):
+# ---------- Reservations ----------
+class ReservationCreate(BaseModel):
     ride_id: int
-
 
 class ReservationRead(ORMModel):
     id: int
