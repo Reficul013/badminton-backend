@@ -9,16 +9,18 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlmodel import Session
+
 from sqlalchemy import func, select as sa_select
 from sqlalchemy.exc import IntegrityError
+
+from sqlmodel import Session, select as sql_select
 
 from .database import init_db, get_session
 from .auth import get_current_user_id
 from . import models as m
 from . import schemas as s
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Rides to Rally API", version=APP_VERSION)
@@ -57,7 +59,8 @@ def create_app() -> FastAPI:
         user = session.get(m.User, user_id)
         if not user:
             raise HTTPException(404, "User not found")
-        return user  # ORM -> Pydantic via from_attributes
+        # validate to Pydantic explicitly
+        return s.UserRead.model_validate(user)
 
     @app.patch("/api/users/{user_id}", response_model=s.UserRead)
     def update_user(
@@ -77,7 +80,7 @@ def create_app() -> FastAPI:
         session.add(user)
         session.commit()
         session.refresh(user)
-        return user  # ORM -> Pydantic via from_attributes
+        return s.UserRead.model_validate(user)
 
     # --------------- Vehicles ---------------
     @app.get("/api/vehicles", response_model=List[s.VehicleRead])
@@ -85,10 +88,12 @@ def create_app() -> FastAPI:
         session: Session = Depends(get_session),
         user_id: int = Depends(get_current_user_id),  # auth + scope
     ):
+        # Use SQLModel.select for clean ORM objects
         rows = session.exec(
-            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
+            sql_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
         ).all()
-        return rows  # ORM -> Pydantic via from_attributes
+        # Return strictly-validated Pydantic models
+        return [s.VehicleRead.model_validate(v) for v in rows]
 
     @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=201)
     def create_vehicle(
@@ -100,7 +105,7 @@ def create_app() -> FastAPI:
         session.add(v)
         session.commit()
         session.refresh(v)
-        return v  # ORM -> Pydantic via from_attributes
+        return s.VehicleRead.model_validate(v)
 
     # ---------------- Rides -----------------
     @app.get("/api/rides", response_model=List[s.RideReadFull])
@@ -128,11 +133,11 @@ def create_app() -> FastAPI:
                 seats_taken=int(taken),
                 notes=r.notes,
                 destination="Rally",
-                host_nickname=getattr(host, "nickname", None),
-                host_avatar_url=getattr(host, "avatar_url", None),
-                vehicle_name=getattr(veh, "name", None),
-                vehicle_model=getattr(veh, "model", None),
-                vehicle_photo_url=getattr(veh, "photo_url", None),
+                host_nickname=host.nickname if host else None,
+                host_avatar_url=host.avatar_url if host else None,
+                vehicle_name=veh.name if veh else None,
+                vehicle_model=veh.model if veh else None,
+                vehicle_photo_url=veh.photo_url if veh else None,
             ))
         out.sort(key=lambda x: x.departure_time)
         return out
@@ -150,7 +155,7 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "Set 'I own a car' in your profile to host")
 
         my_vehicles = session.exec(
-            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
+            sql_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
         ).all()
         if not my_vehicles:
             raise HTTPException(400, "Add your car in Profile before hosting")
@@ -191,10 +196,11 @@ def create_app() -> FastAPI:
         session: Session = Depends(get_session),
     ):
         ride = session.exec(
-            sa_select(m.Ride).where(m.Ride.id == payload.ride_id).with_for_update()
+            sql_select(m.Ride).where(m.Ride.id == payload.ride_id).with_for_update()
         ).one_or_none()
         if not ride:
             raise HTTPException(404, "Ride not found")
+
         if ride.host_id == user_id:
             raise HTTPException(400, "Host cannot reserve own ride")
 
@@ -216,7 +222,7 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "You already reserved a seat on this ride")
 
         session.refresh(res)
-        return res  # ORM -> Pydantic via from_attributes
+        return s.ReservationRead.model_validate(res)
 
     return app
 
