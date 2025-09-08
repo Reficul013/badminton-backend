@@ -1,3 +1,4 @@
+# app/main.py
 import os
 from datetime import datetime
 from typing import List
@@ -8,7 +9,7 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlmodel import Session, select
+from sqlmodel import Session
 from sqlalchemy import func, select as sa_select
 from sqlalchemy.exc import IntegrityError
 
@@ -18,6 +19,41 @@ from . import models as m
 from . import schemas as s
 
 APP_VERSION = "0.5.0"
+
+# ---------------- helpers to shape ORM rows into dicts ----------------
+def user_to_dict(u: m.User) -> dict:
+    return {
+        "id": u.id,
+        "name": u.name,
+        "email": u.email,
+        "role": u.role,
+        "nickname": u.nickname,
+        "avatar_url": u.avatar_url,
+        "owns_car": u.owns_car,
+        "bio": u.bio,
+        "phone": u.phone,
+    }
+
+def vehicle_to_dict(v: m.Vehicle) -> dict:
+    return {
+        "id": v.id,
+        "owner_id": v.owner_id,
+        "name": v.name,
+        "model": v.model,
+        "license_plate": v.license_plate,
+        "photo_url": v.photo_url,
+    }
+
+def reservation_to_dict(r: m.Reservation) -> dict:
+    return {
+        "id": r.id,
+        "ride_id": r.ride_id,
+        "rider_id": r.rider_id,
+        "created_at": r.created_at,
+        "status": r.status,
+    }
+# ---------------------------------------------------------------------
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Rides to Rally API", version=APP_VERSION)
@@ -56,7 +92,7 @@ def create_app() -> FastAPI:
         user = session.get(m.User, user_id)
         if not user:
             raise HTTPException(404, "User not found")
-        return user
+        return user_to_dict(user)
 
     @app.patch("/api/users/{user_id}", response_model=s.UserRead)
     def update_user(
@@ -76,24 +112,30 @@ def create_app() -> FastAPI:
         session.add(user)
         session.commit()
         session.refresh(user)
-        return user
+        return user_to_dict(user)
 
     # --------------- Vehicles ---------------
     @app.get("/api/vehicles", response_model=List[s.VehicleRead])
-    def list_vehicles(session: Session = Depends(get_session)):
-        return session.exec(sa_select(m.Vehicle)).all()
+    def list_vehicles(
+        session: Session = Depends(get_session),
+        user_id: int = Depends(get_current_user_id),  # auth + scope
+    ):
+        rows = session.exec(
+            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
+        ).all()
+        return [vehicle_to_dict(v) for v in rows]
 
-    @app.post("/api/vehicles", response_model=s.VehicleRead)
+    @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=201)
     def create_vehicle(
         payload: s.VehicleCreate,
         user_id: int = Depends(get_current_user_id),
         session: Session = Depends(get_session),
     ):
-        veh = m.Vehicle(owner_id=user_id, **payload.model_dump())
-        session.add(veh)
+        v = m.Vehicle(owner_id=user_id, **payload.model_dump())
+        session.add(v)
         session.commit()
-        session.refresh(veh)
-        return veh
+        session.refresh(v)
+        return vehicle_to_dict(v)
 
     # ---------------- Rides -----------------
     @app.get("/api/rides", response_model=List[s.RideReadFull])
@@ -142,7 +184,9 @@ def create_app() -> FastAPI:
         if not host.owns_car:
             raise HTTPException(400, "Set 'I own a car' in your profile to host")
 
-        my_vehicles = session.exec(sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)).all()
+        my_vehicles = session.exec(
+            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
+        ).all()
         if not my_vehicles:
             raise HTTPException(400, "Add your car in Profile before hosting")
 
@@ -162,7 +206,6 @@ def create_app() -> FastAPI:
         session.commit()
         session.refresh(ride)
 
-        # return with computed seats
         return s.RideRead(
             id=ride.id,
             host_id=ride.host_id,
@@ -182,18 +225,15 @@ def create_app() -> FastAPI:
         user_id: int = Depends(get_current_user_id),
         session: Session = Depends(get_session),
     ):
-        # Lock the ride row (no-op on SQLite, works on Postgres)
         ride = session.exec(
             sa_select(m.Ride).where(m.Ride.id == payload.ride_id).with_for_update()
         ).one_or_none()
         if not ride:
             raise HTTPException(404, "Ride not found")
 
-        # Host cannot reserve own ride
         if ride.host_id == user_id:
             raise HTTPException(400, "Host cannot reserve own ride")
 
-        # Seats left?
         taken = session.exec(
             sa_select(func.count(m.Reservation.id)).where(
                 (m.Reservation.ride_id == ride.id) &
@@ -203,7 +243,6 @@ def create_app() -> FastAPI:
         if int(taken) >= ride.seats_total:
             raise HTTPException(400, "Ride is full")
 
-        # Insert; unique(ride_id, rider_id) ensures one per user
         res = m.Reservation(ride_id=ride.id, rider_id=user_id, status="CONFIRMED")
         session.add(res)
         try:
@@ -213,8 +252,9 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "You already reserved a seat on this ride")
 
         session.refresh(res)
-        return res
+        return reservation_to_dict(res)
 
     return app
+
 
 app = create_app()
