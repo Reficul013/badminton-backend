@@ -64,10 +64,7 @@ def ride_to_full_dict(session: Session, r: m.Ride) -> dict:
     host = session.get(m.User, r.host_id)
     veh  = session.get(m.Vehicle, r.vehicle_id)
 
-    # serialize datetime explicitly
-    dt = r.departure_time
-    if isinstance(dt, datetime):
-        dt = dt.isoformat()
+    dt = r.departure_time.isoformat() if isinstance(r.departure_time, datetime) else r.departure_time
 
     return {
         "id": r.id,
@@ -155,7 +152,7 @@ def create_app() -> FastAPI:
     ):
         rows = session.exec(
             sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
-        ).all()
+        ).scalars().all()
         return [vehicle_to_dict(v) for v in rows]
 
     @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=201)
@@ -171,10 +168,9 @@ def create_app() -> FastAPI:
         return vehicle_to_dict(v)
 
     # ---------------- Rides -----------------
-    # Return plain dicts to avoid Pydantic validation pitfalls on this endpoint
     @app.get("/api/rides")
     def list_rides(session: Session = Depends(get_session)):
-        rows = session.exec(sa_select(m.Ride)).all()
+        rows = session.exec(sa_select(m.Ride)).scalars().all()
         out = [ride_to_full_dict(session, r) for r in rows]
         out.sort(key=lambda x: x["departure_time"])
         return out
@@ -193,7 +189,7 @@ def create_app() -> FastAPI:
 
         my_vehicles = session.exec(
             sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
-        ).all()
+        ).scalars().all()
         if not my_vehicles:
             raise HTTPException(400, "Add your car in Profile before hosting")
 
@@ -234,7 +230,7 @@ def create_app() -> FastAPI:
     ):
         ride = session.exec(
             sa_select(m.Ride).where(m.Ride.id == payload.ride_id).with_for_update()
-        ).one_or_none()
+        ).scalars().one_or_none()
         if not ride:
             raise HTTPException(404, "Ride not found")
 
