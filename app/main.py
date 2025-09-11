@@ -19,26 +19,39 @@ from .auth import get_current_user_id
 from . import models as m
 from . import schemas as s
 
-APP_VERSION = "0.7.1"   # <— bump
+APP_VERSION = "0.7.1"
 
 # ---------------- helpers ----------------
 def user_to_dict(u: m.User) -> dict:
     return {
-        "id": u.id, "name": u.name, "email": u.email, "role": u.role,
-        "nickname": u.nickname, "avatar_url": u.avatar_url, "owns_car": u.owns_car,
-        "bio": u.bio, "phone": u.phone,
+        "id": u.id,
+        "name": u.name,
+        "email": u.email,
+        "role": u.role,
+        "nickname": u.nickname,
+        "avatar_url": u.avatar_url,
+        "owns_car": u.owns_car,
+        "bio": u.bio,
+        "phone": u.phone,
     }
 
 def vehicle_to_dict(v: m.Vehicle) -> dict:
     return {
-        "id": v.id, "owner_id": v.owner_id, "name": v.name, "model": v.model,
-        "license_plate": v.license_plate, "photo_url": v.photo_url,
+        "id": v.id,
+        "owner_id": v.owner_id,
+        "name": v.name,
+        "model": v.model,
+        "license_plate": v.license_plate,
+        "photo_url": v.photo_url,
     }
 
 def reservation_to_dict(r: m.Reservation) -> dict:
     return {
-        "id": r.id, "ride_id": r.ride_id, "rider_id": r.rider_id,
-        "created_at": r.created_at, "status": r.status,
+        "id": r.id,
+        "ride_id": r.ride_id,
+        "rider_id": r.rider_id,
+        "created_at": r.created_at,
+        "status": r.status,
     }
 
 def ride_to_full_dict(session: Session, r: m.Ride) -> dict:
@@ -55,9 +68,14 @@ def ride_to_full_dict(session: Session, r: m.Ride) -> dict:
     dt = r.departure_time.isoformat() if isinstance(r.departure_time, datetime) else r.departure_time
 
     return {
-        "id": r.id, "host_id": r.host_id, "vehicle_id": r.vehicle_id,
-        "origin": r.origin, "departure_time": dt,
-        "seats_total": r.seats_total, "seats_taken": int(taken), "notes": r.notes,
+        "id": r.id,
+        "host_id": r.host_id,
+        "vehicle_id": r.vehicle_id,
+        "origin": r.origin,
+        "departure_time": dt,
+        "seats_total": r.seats_total,
+        "seats_taken": int(taken),
+        "notes": r.notes,
         "destination": "Rally",
         "host_nickname": host.nickname if host else None,
         "host_avatar_url": host.avatar_url if host else None,
@@ -65,15 +83,23 @@ def ride_to_full_dict(session: Session, r: m.Ride) -> dict:
         "vehicle_model": veh.model if veh else None,
         "vehicle_photo_url": veh.photo_url if veh else None,
     }
-# ----------------------------------------
+# -----------------------------------------
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Rides to Rally API", version=APP_VERSION)
 
     # CORS
-    origins = os.getenv("ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173")
-    allow_origins = [o.strip() for o in origins.split(",") if o.strip()]
+    default_origins = [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        # add your GitHub Pages/production origins here:
+        "https://reiful013.github.io",
+        "https://reiful013.github.io/badminton-frontend",
+    ]
+    env_origins = os.getenv("ALLOWED_ORIGINS", "")
+    allow_origins = [o.strip() for o in env_origins.split(",") if o.strip()] or default_origins
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allow_origins,
@@ -91,14 +117,14 @@ def create_app() -> FastAPI:
     def _startup():
         init_db()
 
-    # friendlier 401s
+    # ---------- friendlier 401s ----------
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         if exc.status_code == 401:
             return JSONResponse(status_code=401, content={"detail": "Please sign in to continue."})
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-    # health / ping
+    # ---------------- Health/Uptime ----------------
     @app.get("/api/health")
     def health():
         return {"status": "ok", "version": APP_VERSION}
@@ -262,8 +288,7 @@ def create_app() -> FastAPI:
             "destination": "Rally",
         }
 
-    # ---- Delete ride (host only) — cancels reservations then deletes ride
-    @app.delete("/api/rides/{ride_id}")
+    @app.delete("/api/rides/{ride_id}", status_code=204)
     def delete_ride(
         ride_id: int,
         user_id: int = Depends(get_current_user_id),
@@ -271,23 +296,19 @@ def create_app() -> FastAPI:
     ):
         ride = session.get(m.Ride, ride_id)
         if not ride:
-            # not found -> idempotent response
-            return {"deleted": False, "cancelled_reservations": 0}
-
+            return  # idempotent
         if ride.host_id != user_id:
             raise HTTPException(403, "Only the host can delete this ride")
 
-        # gather & delete reservations (to avoid FK issues)
+        # delete reservations first to avoid FK issues
         res_rows = session.exec(
             sa_select(m.Reservation).where(m.Reservation.ride_id == ride_id)
         ).scalars().all()
-        cancelled = len(res_rows)
         for r in res_rows:
             session.delete(r)
 
         session.delete(ride)
         session.commit()
-        return {"deleted": True, "cancelled_reservations": cancelled}
 
     # ------------- Reservations -------------
     @app.post("/api/reservations", response_model=s.ReservationRead)
@@ -301,7 +322,6 @@ def create_app() -> FastAPI:
         ).scalars().one_or_none()
         if not ride:
             raise HTTPException(404, "Ride not found")
-
         if ride.host_id == user_id:
             raise HTTPException(400, "Host cannot reserve own ride")
 
@@ -345,17 +365,14 @@ def create_app() -> FastAPI:
         session: Session = Depends(get_session),
     ):
         res = session.exec(
-            sa_select(m.Reservation)
-            .where(
+            sa_select(m.Reservation).where(
                 (m.Reservation.ride_id == ride_id) &
                 (m.Reservation.rider_id == user_id) &
                 (m.Reservation.status == "CONFIRMED")
             )
         ).scalars().one_or_none()
-
         if not res:
-            return  # idempotent
-
+            return
         res.status = "CANCELLED"
         session.add(res)
         session.commit()
