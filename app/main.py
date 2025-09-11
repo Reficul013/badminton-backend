@@ -6,9 +6,10 @@ from typing import List, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlmodel import Session
 from sqlalchemy import func, select as sa_select
 from sqlalchemy.exc import IntegrityError
@@ -18,7 +19,7 @@ from .auth import get_current_user_id
 from . import models as m
 from . import schemas as s
 
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.6.1"
 
 # ---------------- helpers (shape ORM rows into plain dicts) ----------------
 def user_to_dict(u: m.User) -> dict:
@@ -108,10 +109,28 @@ def create_app() -> FastAPI:
     def _startup():
         init_db()
 
-    # ---------------- Health ----------------
+    # ---------- friendlier 401s ----------
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        if exc.status_code == 401:
+            # unify auth errors so the UI can show "Please sign in"
+            return JSONResponse(status_code=401, content={"detail": "Please sign in to continue."})
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    # ---------------- Health/Uptime ----------------
     @app.get("/api/health")
     def health():
         return {"status": "ok", "version": APP_VERSION}
+
+    # HEAD /health so “pings” don’t allocate JSON
+    @app.head("/api/health")
+    def health_head():
+        return PlainTextResponse("", status_code=204)
+
+    # simple ping for uptime monitors (no auth)
+    @app.get("/api/ping")
+    def ping():
+        return {"pong": True, "ts": datetime.utcnow().isoformat()}
 
     # ---------------- Users -----------------
     @app.get("/api/users/me", response_model=s.UserRead)
@@ -203,9 +222,9 @@ def create_app() -> FastAPI:
     ):
         return _upsert_vehicle(session, user_id, payload)
 
-    # Explicit PUT endpoint as well
-    @app.put("/api/vehicles/me", response_model=s.VehicleRead)
-    def put_my_vehicle(
+    # Compat path used by some clients
+    @app.post("/api/vehicles/upsert", response_model=s.VehicleRead, status_code=200)
+    def upsert_vehicle_alias(
         payload: s.VehicleCreate,
         user_id: int = Depends(get_current_user_id),
         session: Session = Depends(get_session),
