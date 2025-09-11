@@ -21,44 +21,30 @@ from . import schemas as s
 
 APP_VERSION = "0.7.0"
 
-# ---------------- helpers (shape ORM rows into plain dicts) ----------------
+# ---------------- helpers ----------------
 def user_to_dict(u: m.User) -> dict:
     return {
-        "id": u.id,
-        "name": u.name,
-        "email": u.email,
-        "role": u.role,
-        "nickname": u.nickname,
-        "avatar_url": u.avatar_url,
-        "owns_car": u.owns_car,
-        "bio": u.bio,
-        "phone": u.phone,
+        "id": u.id, "name": u.name, "email": u.email, "role": u.role,
+        "nickname": u.nickname, "avatar_url": u.avatar_url, "owns_car": u.owns_car,
+        "bio": u.bio, "phone": u.phone,
     }
 
 def vehicle_to_dict(v: m.Vehicle) -> dict:
     return {
-        "id": v.id,
-        "owner_id": v.owner_id,
-        "name": v.name,
-        "model": v.model,
-        "license_plate": v.license_plate,
-        "photo_url": v.photo_url,
+        "id": v.id, "owner_id": v.owner_id, "name": v.name, "model": v.model,
+        "license_plate": v.license_plate, "photo_url": v.photo_url,
     }
 
 def reservation_to_dict(r: m.Reservation) -> dict:
     return {
-        "id": r.id,
-        "ride_id": r.ride_id,
-        "rider_id": r.rider_id,
-        "created_at": r.created_at,
-        "status": r.status,
+        "id": r.id, "ride_id": r.ride_id, "rider_id": r.rider_id,
+        "created_at": r.created_at, "status": r.status,
     }
 
 def ride_to_full_dict(session: Session, r: m.Ride) -> dict:
     taken = session.exec(
         sa_select(func.count(m.Reservation.id)).where(
-            (m.Reservation.ride_id == r.id) &
-            (m.Reservation.status == "CONFIRMED")
+            (m.Reservation.ride_id == r.id) & (m.Reservation.status == "CONFIRMED")
         )
     ).scalar_one() or 0
 
@@ -68,29 +54,27 @@ def ride_to_full_dict(session: Session, r: m.Ride) -> dict:
     dt = r.departure_time.isoformat() if isinstance(r.departure_time, datetime) else r.departure_time
 
     return {
-        "id": r.id,
-        "host_id": r.host_id,
-        "vehicle_id": r.vehicle_id,
-        "origin": r.origin,
-        "departure_time": dt,
-        "seats_total": r.seats_total,
-        "seats_taken": int(taken),
-        "notes": r.notes,
-        "destination": "Rally",
+        "id": r.id, "host_id": r.host_id, "vehicle_id": r.vehicle_id,
+        "origin": r.origin, "departure_time": dt,
+        "seats_total": r.seats_total, "seats_taken": int(taken),
+        "notes": r.notes, "destination": "Rally",
         "host_nickname": host.nickname if host else None,
         "host_avatar_url": host.avatar_url if host else None,
         "vehicle_name": veh.name if veh else None,
         "vehicle_model": veh.model if veh else None,
         "vehicle_photo_url": veh.photo_url if veh else None,
     }
-# --------------------------------------------------------------------------
+# -----------------------------------------
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Rides to Rally API", version=APP_VERSION)
 
     # CORS
-    origins = os.getenv("ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173")
+    origins = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://127.0.0.1:5173,http://localhost:5173"
+    )
     allow_origins = [o.strip() for o in origins.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
@@ -113,7 +97,6 @@ def create_app() -> FastAPI:
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         if exc.status_code == 401:
-            # unify auth errors so the UI can show "Please sign in"
             return JSONResponse(status_code=401, content={"detail": "Please sign in to continue."})
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
@@ -122,22 +105,17 @@ def create_app() -> FastAPI:
     def health():
         return {"status": "ok", "version": APP_VERSION}
 
-    # HEAD /health so “pings” don’t allocate JSON
     @app.head("/api/health")
     def health_head():
         return PlainTextResponse("", status_code=204)
 
-    # simple ping for uptime monitors (no auth)
     @app.get("/api/ping")
     def ping():
         return {"pong": True, "ts": datetime.utcnow().isoformat()}
 
     # ---------------- Users -----------------
     @app.get("/api/users/me", response_model=s.UserRead)
-    def me(
-        user_id: int = Depends(get_current_user_id),
-        session: Session = Depends(get_session),
-    ):
+    def me(user_id: int = Depends(get_current_user_id), session: Session = Depends(get_session)):
         user = session.get(m.User, user_id)
         if not user:
             raise HTTPException(404, "User not found")
@@ -167,7 +145,7 @@ def create_app() -> FastAPI:
     @app.get("/api/vehicles", response_model=List[s.VehicleRead])
     def list_vehicles(
         session: Session = Depends(get_session),
-        user_id: int = Depends(get_current_user_id),  # auth + scoping
+        user_id: int = Depends(get_current_user_id),
     ):
         rows = session.exec(
             sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id)
@@ -175,27 +153,18 @@ def create_app() -> FastAPI:
         return [vehicle_to_dict(v) for v in rows]
 
     @app.get("/api/vehicles/me", response_model=Optional[s.VehicleRead])
-    def get_my_vehicle(
-        session: Session = Depends(get_session),
-        user_id: int = Depends(get_current_user_id),
-    ):
+    def get_my_vehicle(session: Session = Depends(get_session), user_id: int = Depends(get_current_user_id)):
         v = session.exec(
-            sa_select(m.Vehicle)
-            .where(m.Vehicle.owner_id == user_id)
-            .order_by(m.Vehicle.id.desc())
+            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id).order_by(m.Vehicle.id.desc())
         ).scalars().first()
         return vehicle_to_dict(v) if v else None
 
     def _upsert_vehicle(session: Session, user_id: int, payload: s.VehicleCreate) -> dict:
-        # Latest vehicle for user (treat vehicles as 1-per-user)
         v = session.exec(
-            sa_select(m.Vehicle)
-            .where(m.Vehicle.owner_id == user_id)
-            .order_by(m.Vehicle.id.desc())
+            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id).order_by(m.Vehicle.id.desc())
         ).scalars().first()
 
         data = payload.model_dump(exclude_unset=True)
-        # Don't clobber existing photo with null unless explicitly provided
         if data.get("photo_url", None) is None:
             data.pop("photo_url", None)
 
@@ -213,7 +182,6 @@ def create_app() -> FastAPI:
             session.refresh(v)
             return vehicle_to_dict(v)
 
-    # POST is an UPSERT (returns 200)
     @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=200)
     def create_or_update_vehicle(
         payload: s.VehicleCreate,
@@ -222,7 +190,6 @@ def create_app() -> FastAPI:
     ):
         return _upsert_vehicle(session, user_id, payload)
 
-    # Compat path used by some clients
     @app.post("/api/vehicles/upsert", response_model=s.VehicleRead, status_code=200)
     def upsert_vehicle_alias(
         payload: s.VehicleCreate,
@@ -235,6 +202,13 @@ def create_app() -> FastAPI:
     @app.get("/api/rides")
     def list_rides(session: Session = Depends(get_session)):
         rows = session.exec(sa_select(m.Ride)).scalars().all()
+        out = [ride_to_full_dict(session, r) for r in rows]
+        out.sort(key=lambda x: x["departure_time"])
+        return out
+
+    @app.get("/api/rides/mine")
+    def my_rides(user_id: int = Depends(get_current_user_id), session: Session = Depends(get_session)):
+        rows = session.exec(sa_select(m.Ride).where(m.Ride.host_id == user_id)).scalars().all()
         out = [ride_to_full_dict(session, r) for r in rows]
         out.sort(key=lambda x: x["departure_time"])
         return out
@@ -252,9 +226,7 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "Set 'I own a car' in your profile to host")
 
         my_vehicles = session.exec(
-            sa_select(m.Vehicle)
-            .where(m.Vehicle.owner_id == user_id)
-            .order_by(m.Vehicle.id.desc())
+            sa_select(m.Vehicle).where(m.Vehicle.owner_id == user_id).order_by(m.Vehicle.id.desc())
         ).scalars().all()
         if not my_vehicles:
             raise HTTPException(400, "Add your car in Profile before hosting")
@@ -276,18 +248,13 @@ def create_app() -> FastAPI:
         session.refresh(ride)
 
         return {
-            "id": ride.id,
-            "host_id": ride.host_id,
-            "vehicle_id": ride.vehicle_id,
-            "origin": ride.origin,
-            "departure_time": ride.departure_time.isoformat(),
-            "seats_total": ride.seats_total,
-            "seats_taken": 0,
-            "notes": ride.notes,
+            "id": ride.id, "host_id": ride.host_id, "vehicle_id": ride.vehicle_id,
+            "origin": ride.origin, "departure_time": ride.departure_time.isoformat(),
+            "seats_total": ride.seats_total, "seats_taken": 0, "notes": ride.notes,
             "destination": "Rally",
         }
 
-    # NEW: Host can delete/unhost their own ride
+    # NEW: host can delete their ride (only if no reservations)
     @app.delete("/api/rides/{ride_id}", status_code=204)
     def delete_ride(
         ride_id: int,
@@ -296,16 +263,24 @@ def create_app() -> FastAPI:
     ):
         ride = session.get(m.Ride, ride_id)
         if not ride:
-            return  # idempotent
+            raise HTTPException(404, "Ride not found")
         if ride.host_id != user_id:
             raise HTTPException(403, "Only the host can delete this ride")
 
-        # Remove related reservations first (avoid FK constraint issues)
-        res_rows = session.exec(
+        existing = session.exec(
+            sa_select(func.count(m.Reservation.id)).where(
+                (m.Reservation.ride_id == ride_id) & (m.Reservation.status == "CONFIRMED")
+            )
+        ).scalar_one() or 0
+        if existing > 0:
+            raise HTTPException(400, "Cannot delete a ride that already has reservations")
+
+        # clean up any non-confirmed reservations if present
+        dangling = session.exec(
             sa_select(m.Reservation).where(m.Reservation.ride_id == ride_id)
         ).scalars().all()
-        for r in res_rows:
-            session.delete(r)
+        for row in dangling:
+            session.delete(row)
 
         session.delete(ride)
         session.commit()
@@ -328,8 +303,7 @@ def create_app() -> FastAPI:
 
         taken = session.exec(
             sa_select(func.count(m.Reservation.id)).where(
-                (m.Reservation.ride_id == ride.id) &
-                (m.Reservation.status == "CONFIRMED")
+                (m.Reservation.ride_id == ride.id) & (m.Reservation.status == "CONFIRMED")
             )
         ).scalar_one() or 0
         if int(taken) >= ride.seats_total:
@@ -346,21 +320,15 @@ def create_app() -> FastAPI:
         session.refresh(res)
         return reservation_to_dict(res)
 
-    # List rides I reserved (ids)
     @app.get("/api/reservations/me", response_model=List[int])
-    def my_reservations(
-        user_id: int = Depends(get_current_user_id),
-        session: Session = Depends(get_session),
-    ):
+    def my_reservations(user_id: int = Depends(get_current_user_id), session: Session = Depends(get_session)):
         rows = session.exec(
             sa_select(m.Reservation.ride_id).where(
-                (m.Reservation.rider_id == user_id) &
-                (m.Reservation.status == "CONFIRMED")
+                (m.Reservation.rider_id == user_id) & (m.Reservation.status == "CONFIRMED")
             )
         ).all()
         return [r[0] if isinstance(r, tuple) else r for r in rows]
 
-    # Cancel my reservation (soft-cancel)
     @app.delete("/api/reservations/{ride_id}", status_code=204)
     def cancel_reservation(
         ride_id: int,
@@ -368,17 +336,14 @@ def create_app() -> FastAPI:
         session: Session = Depends(get_session),
     ):
         res = session.exec(
-            sa_select(m.Reservation)
-            .where(
+            sa_select(m.Reservation).where(
                 (m.Reservation.ride_id == ride_id) &
                 (m.Reservation.rider_id == user_id) &
                 (m.Reservation.status == "CONFIRMED")
             )
         ).scalars().one_or_none()
-
         if not res:
-            return  # idempotent
-
+            return
         res.status = "CANCELLED"
         session.add(res)
         session.commit()
