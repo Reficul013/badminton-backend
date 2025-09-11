@@ -18,7 +18,7 @@ from .auth import get_current_user_id
 from . import models as m
 from . import schemas as s
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 
 # ---------------- helpers (shape ORM rows into plain dicts) ----------------
 def user_to_dict(u: m.User) -> dict:
@@ -145,7 +145,6 @@ def create_app() -> FastAPI:
         return user_to_dict(user)
 
     # --------------- Vehicles ---------------
-
     @app.get("/api/vehicles", response_model=List[s.VehicleRead])
     def list_vehicles(
         session: Session = Depends(get_session),
@@ -195,7 +194,7 @@ def create_app() -> FastAPI:
             session.refresh(v)
             return vehicle_to_dict(v)
 
-    # Keep POST but make it UPSERT (return 200 so client can reuse)
+    # POST is an UPSERT (returns 200)
     @app.post("/api/vehicles", response_model=s.VehicleRead, status_code=200)
     def create_or_update_vehicle(
         payload: s.VehicleCreate,
@@ -304,6 +303,43 @@ def create_app() -> FastAPI:
 
         session.refresh(res)
         return reservation_to_dict(res)
+
+    # List rides I reserved (ids)
+    @app.get("/api/reservations/me", response_model=List[int])
+    def my_reservations(
+        user_id: int = Depends(get_current_user_id),
+        session: Session = Depends(get_session),
+    ):
+        rows = session.exec(
+            sa_select(m.Reservation.ride_id).where(
+                (m.Reservation.rider_id == user_id) &
+                (m.Reservation.status == "CONFIRMED")
+            )
+        ).all()
+        return [r[0] if isinstance(r, tuple) else r for r in rows]
+
+    # Cancel my reservation (soft-cancel)
+    @app.delete("/api/reservations/{ride_id}", status_code=204)
+    def cancel_reservation(
+        ride_id: int,
+        user_id: int = Depends(get_current_user_id),
+        session: Session = Depends(get_session),
+    ):
+        res = session.exec(
+            sa_select(m.Reservation)
+            .where(
+                (m.Reservation.ride_id == ride_id) &
+                (m.Reservation.rider_id == user_id) &
+                (m.Reservation.status == "CONFIRMED")
+            )
+        ).scalars().one_or_none()
+
+        if not res:
+            return  # idempotent
+
+        res.status = "CANCELLED"
+        session.add(res)
+        session.commit()
 
     return app
 
