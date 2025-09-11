@@ -2,7 +2,7 @@
 import os
 from datetime import datetime
 from typing import List, Optional
-
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -233,12 +233,18 @@ def create_app() -> FastAPI:
         return _upsert_vehicle(session, user_id, payload)
 
     # ---------------- Rides -----------------
+
     @app.get("/api/rides")
     def list_rides(session: Session = Depends(get_session)):
-        rows = session.exec(sa_select(m.Ride)).scalars().all()
+        now = datetime.utcnow()  # rides are stored/compared in UTC
+        rows = session.exec(
+            sa_select(m.Ride).where(m.Ride.departure_time >= now)
+        ).scalars().all()
         out = [ride_to_full_dict(session, r) for r in rows]
         out.sort(key=lambda x: x["departure_time"])
         return out
+
+
 
     @app.post("/api/rides")
     def create_ride(
