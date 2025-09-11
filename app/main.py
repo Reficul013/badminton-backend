@@ -19,7 +19,7 @@ from .auth import get_current_user_id
 from . import models as m
 from . import schemas as s
 
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.7.0"
 
 # ---------------- helpers (shape ORM rows into plain dicts) ----------------
 def user_to_dict(u: m.User) -> dict:
@@ -286,6 +286,29 @@ def create_app() -> FastAPI:
             "notes": ride.notes,
             "destination": "Rally",
         }
+
+    # NEW: Host can delete/unhost their own ride
+    @app.delete("/api/rides/{ride_id}", status_code=204)
+    def delete_ride(
+        ride_id: int,
+        user_id: int = Depends(get_current_user_id),
+        session: Session = Depends(get_session),
+    ):
+        ride = session.get(m.Ride, ride_id)
+        if not ride:
+            return  # idempotent
+        if ride.host_id != user_id:
+            raise HTTPException(403, "Only the host can delete this ride")
+
+        # Remove related reservations first (avoid FK constraint issues)
+        res_rows = session.exec(
+            sa_select(m.Reservation).where(m.Reservation.ride_id == ride_id)
+        ).scalars().all()
+        for r in res_rows:
+            session.delete(r)
+
+        session.delete(ride)
+        session.commit()
 
     # ------------- Reservations -------------
     @app.post("/api/reservations", response_model=s.ReservationRead)
